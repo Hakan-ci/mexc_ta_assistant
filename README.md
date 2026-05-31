@@ -77,6 +77,33 @@ docker compose up --build
 
 SQLite data is stored under `./data` through the compose volume.
 
+## GitHub Actions
+
+This project includes scheduled GitHub Actions workflows for hosted execution:
+
+- `MEXC TA 4H`: runs at `00:07`, `04:07`, `08:07`, `12:07`, `16:07`, and `20:07` UTC.
+- `MEXC TA 1D`: runs at `00:10` UTC every day.
+- `Tests`: runs on `push`, `pull_request`, and manual dispatch.
+
+Add the Telegram credentials as repository secrets:
+
+1. Open the GitHub repository.
+2. Go to `Settings` -> `Secrets and variables` -> `Actions`.
+3. Select `New repository secret`.
+4. Add `TELEGRAM_BOT_TOKEN`.
+5. Add `TELEGRAM_CHAT_ID`.
+
+To run a workflow manually:
+
+1. Open the repository `Actions` tab.
+2. Select `MEXC TA 4H`, `MEXC TA 1D`, or `Tests`.
+3. Select `Run workflow`.
+4. Choose the branch and confirm `Run workflow`.
+
+SQLite storage on GitHub-hosted runners is not persistent. Each scheduled or manually triggered workflow run starts on a fresh runner, so local `data/analysis.db` contents are not preserved between runs unless you add external storage or upload artifacts.
+
+GitHub Actions execution follows the same restriction as local execution: this project does not place trades and only sends technical analysis notifications based on public MEXC Futures market data.
+
 ## Scoring System
 
 For every symbol and timeframe, both analytical directions are evaluated separately.
