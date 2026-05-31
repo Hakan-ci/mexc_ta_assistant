@@ -8,12 +8,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: mexc-ta-4h
+  cancel-in-progress: false
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      ENABLE_SUMMARY_MESSAGES: "true"
+      ENABLE_ALERT_MESSAGES: "true"
+      LOG_LEVEL: "INFO"
 
     steps:
       - name: Check out repository
