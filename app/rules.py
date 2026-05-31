@@ -123,7 +123,8 @@ def evaluate_symbol_timeframe(
     stoch_d = _to_optional_float(stoch_frame["d"].iloc[-1])
     macd_hist = _to_optional_float(macd_frame["histogram"].iloc[-1])
     supertrend_direction = str(supertrend_frame["direction"].iloc[-1])
-    candle_time = pd.Timestamp(latest["time"]).to_pydatetime()
+    candle_open_time = pd.Timestamp(latest["time"])
+    candle_close_time = (candle_open_time + timeframe_config.duration).to_pydatetime()
     created_at = pd.Timestamp.utcnow().to_pydatetime()
 
     long_criteria = CriteriaResult(
@@ -147,7 +148,7 @@ def evaluate_symbol_timeframe(
             timeframe=timeframe,
             timeframe_label=timeframe_config.label,
             direction=LONG,
-            candle_time=candle_time,
+            candle_time=candle_close_time,
             created_at=created_at,
             rsi_value=rsi_value,
             stoch_k=stoch_k,
@@ -163,7 +164,7 @@ def evaluate_symbol_timeframe(
             timeframe=timeframe,
             timeframe_label=timeframe_config.label,
             direction=SHORT,
-            candle_time=candle_time,
+            candle_time=candle_close_time,
             created_at=created_at,
             rsi_value=rsi_value,
             stoch_k=stoch_k,
