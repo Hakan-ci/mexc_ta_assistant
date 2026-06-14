@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 
+
+PATTERN_CATEGORY_BULLISH = "bullish_reversal"
+PATTERN_CATEGORY_BEARISH = "bearish_reversal"
+PATTERN_CATEGORY_NEUTRAL = "neutral"
 
 BULLISH_REVERSAL_PATTERNS = {
     "Bullish Engulfing",
@@ -27,6 +33,13 @@ NEUTRAL_PATTERNS = {
     "Inside Bar",
     "High Wave Candle",
 }
+
+
+@dataclass(frozen=True)
+class CandlePatternSignal:
+    pattern: str
+    category: str
+    signal_age: int
 
 
 def detect_latest_patterns(frame: pd.DataFrame) -> list[str]:
@@ -77,14 +90,62 @@ def pattern_text(patterns: list[str]) -> str:
 
 
 def is_valid_for_direction(patterns: list[str], direction: str) -> bool:
-    pattern_set = set(patterns)
-    if pattern_set & NEUTRAL_PATTERNS:
-        return True
+    return _select_pattern_for_direction(patterns, direction) is not None
+
+
+def pattern_category(pattern: str) -> str | None:
+    if pattern in BULLISH_REVERSAL_PATTERNS:
+        return PATTERN_CATEGORY_BULLISH
+    if pattern in BEARISH_REVERSAL_PATTERNS:
+        return PATTERN_CATEGORY_BEARISH
+    if pattern in NEUTRAL_PATTERNS:
+        return PATTERN_CATEGORY_NEUTRAL
+    return None
+
+
+def find_recent_candle_pattern(
+    frame: pd.DataFrame,
+    direction: str,
+    lookback: int,
+) -> CandlePatternSignal | None:
+    if frame.empty or lookback < 0:
+        return None
+
+    data = frame.reset_index(drop=True)
+    latest_index = len(data) - 1
+    max_age = min(lookback, latest_index)
+    for age in range(max_age + 1):
+        current_index = latest_index - age
+        patterns = detect_latest_patterns(data.iloc[: current_index + 1])
+        selected = _select_pattern_for_direction(patterns, direction)
+        if selected is None:
+            continue
+        category = pattern_category(selected)
+        if category is None:
+            continue
+        return CandlePatternSignal(
+            pattern=selected,
+            category=category,
+            signal_age=age,
+        )
+    return None
+
+
+def _select_pattern_for_direction(patterns: list[str], direction: str) -> str | None:
     if direction == "Long":
-        return bool(pattern_set & BULLISH_REVERSAL_PATTERNS)
-    if direction == "Short":
-        return bool(pattern_set & BEARISH_REVERSAL_PATTERNS)
-    return False
+        preferred_category = PATTERN_CATEGORY_BULLISH
+    elif direction == "Short":
+        preferred_category = PATTERN_CATEGORY_BEARISH
+    else:
+        return None
+
+    for pattern in patterns:
+        if pattern_category(pattern) == preferred_category:
+            return pattern
+    for pattern in patterns:
+        if pattern_category(pattern) == PATTERN_CATEGORY_NEUTRAL:
+            return pattern
+    return None
 
 
 def _latest(data: pd.DataFrame) -> pd.Series:
@@ -336,4 +397,3 @@ def _is_high_wave(data: pd.DataFrame) -> bool:
         and _upper_shadow(current) >= 2 * body
         and _lower_shadow(current) >= 2 * body
     )
-

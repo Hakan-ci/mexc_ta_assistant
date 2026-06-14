@@ -77,6 +77,24 @@ class SupertrendSettings:
 
 
 @dataclass(frozen=True)
+class SignalValidityWindowSettings:
+    stoch_rsi_cross_lookback: int = 2
+    candle_pattern_lookback: int = 2
+
+
+SIGNAL_VALIDITY_WINDOWS: dict[str, SignalValidityWindowSettings] = {
+    "Hour4": SignalValidityWindowSettings(
+        stoch_rsi_cross_lookback=2,
+        candle_pattern_lookback=2,
+    ),
+    "Day1": SignalValidityWindowSettings(
+        stoch_rsi_cross_lookback=2,
+        candle_pattern_lookback=2,
+    ),
+}
+
+
+@dataclass(frozen=True)
 class AppConfig:
     symbols: tuple[str, ...] = (
         "BTC_USDT",
@@ -95,6 +113,9 @@ class AppConfig:
     stoch_rsi: StochRsiSettings = field(default_factory=StochRsiSettings)
     macd: MacdSettings = field(default_factory=MacdSettings)
     supertrend: SupertrendSettings = field(default_factory=SupertrendSettings)
+    signal_validity_windows: dict[str, SignalValidityWindowSettings] = field(
+        default_factory=lambda: SIGNAL_VALIDITY_WINDOWS.copy()
+    )
     minimum_score: int = 4
     mexc_base_url: str = "https://contract.mexc.com"
     request_timeout_seconds: float = 10.0
@@ -118,4 +139,3 @@ def load_config() -> AppConfig:
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         sqlite_path=_env_path("SQLITE_PATH", PROJECT_ROOT / "data" / "analysis.db"),
     )
-

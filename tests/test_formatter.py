@@ -10,6 +10,7 @@ from app.rules import (
     NOT_SUITABLE,
     SHORT,
     AnalysisResult,
+    CriterionResult,
     CriteriaResult,
 )
 
@@ -130,3 +131,29 @@ def test_alerts_use_compact_format_and_ok_label() -> None:
     assert "ALERT:" not in message
     assert "criteria satisfied" not in message
     assert "ADA_USDT" not in message
+
+
+def test_alerts_show_event_signal_ages_without_crowding_summary() -> None:
+    message = format_analysis_message(
+        results=[
+            _result(
+                "BTC_USDT",
+                LONG,
+                CriteriaResult(
+                    rsi=CriterionResult(True, 0, 35.0, "RSI valid"),
+                    stoch=CriterionResult(True, 1, {"k": 25.0, "d": 20.0}, "Stoch valid"),
+                    macd=CriterionResult(True, 0, [-0.8, -0.5, -0.2], "MACD valid"),
+                    candle=CriterionResult(True, 0, {"pattern": "Hammer"}, "Candle valid"),
+                    supertrend=CriterionResult(False, None, "bearish", "Supertrend invalid"),
+                ),
+                4,
+                CRITERIA_SATISFIED,
+            )
+        ],
+        include_summary=True,
+        include_alerts=True,
+        minimum_score=4,
+    )
+
+    assert "BTC  Long  1   1     1    1      0  4/5   OK" in message
+    assert "BTC 4H Long 4/5 OK | Stoch: 1 candle ago, Candle: latest" in message

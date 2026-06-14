@@ -65,6 +65,69 @@ def is_stoch_rsi_short_crossover(k: pd.Series, d: pd.Series) -> bool:
     )
 
 
+def find_recent_stoch_rsi_long_crossover(
+    k: pd.Series,
+    d: pd.Series,
+    lookback: int,
+) -> int | None:
+    return find_recent_stoch_rsi_crossover(k, d, "Long", lookback)
+
+
+def find_recent_stoch_rsi_short_crossover(
+    k: pd.Series,
+    d: pd.Series,
+    lookback: int,
+) -> int | None:
+    return find_recent_stoch_rsi_crossover(k, d, "Short", lookback)
+
+
+def find_recent_stoch_rsi_crossover(
+    k: pd.Series,
+    d: pd.Series,
+    direction: str,
+    lookback: int,
+) -> int | None:
+    values = pd.DataFrame({"k": k, "d": d}).reset_index(drop=True)
+    if values.empty or lookback < 0:
+        return None
+
+    latest_index = len(values) - 1
+    max_age = min(lookback, latest_index)
+    for age in range(max_age + 1):
+        current_index = latest_index - age
+        if current_index <= 0:
+            continue
+        previous = values.iloc[current_index - 1]
+        current = values.iloc[current_index]
+        if previous.isna().any() or current.isna().any():
+            continue
+        if _is_stoch_rsi_crossover(previous, current, direction):
+            return age
+    return None
+
+
+def _is_stoch_rsi_crossover(
+    previous: pd.Series,
+    current: pd.Series,
+    direction: str,
+) -> bool:
+    if direction == "Long":
+        return bool(
+            previous["k"] < previous["d"]
+            and current["k"] > current["d"]
+            and current["k"] < 50
+            and current["d"] < 50
+        )
+    if direction == "Short":
+        return bool(
+            previous["k"] > previous["d"]
+            and current["k"] < current["d"]
+            and current["k"] > 50
+            and current["d"] > 50
+        )
+    return False
+
+
 def calculate_macd(
     close: pd.Series,
     fast: int = 12,
@@ -189,4 +252,3 @@ def calculate_supertrend(
         },
         index=frame.index,
     )
-

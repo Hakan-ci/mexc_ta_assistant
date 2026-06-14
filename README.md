@@ -110,11 +110,16 @@ For every symbol and timeframe, both analytical directions are evaluated separat
 
 Criteria:
 
-1. RSI
-2. Stoch RSI
-3. MACD histogram fading
-4. Candlestick pattern
-5. Supertrend
+1. RSI state on the latest closed candle
+2. Stoch RSI crossover within the configured recent-candle window
+3. MACD histogram fading on the latest closed candles
+4. Candlestick pattern within the configured recent-candle window
+5. Supertrend direction on the latest closed candle
+
+Signal validity windows are configured in `app/config.py` through
+`SIGNAL_VALIDITY_WINDOWS`. The default for both `Hour4` and `Day1` allows
+Stoch RSI crossover and candlestick pattern events from the latest closed candle
+through two candles ago.
 
 Labels:
 
@@ -124,11 +129,9 @@ Labels:
 
 If both analytical directions score at least `4/5` for the same symbol and timeframe, the result is marked as `Conflicting signal`.
 
-Every Telegram message ends with:
-
-```text
-Note: This is an automated technical analysis check and is not financial advice.
-```
+Telegram messages keep a compact summary table. Alert rows include event ages
+for Stoch RSI and candlestick pattern criteria when those event-based criteria
+are valid.
 
 ## Tests
 
@@ -138,4 +141,3 @@ pytest
 ```
 
 The tests cover indicator calculations, crossover and fading logic, Supertrend direction, rule labels, candlestick patterns, and SQLite duplicate prevention.
-

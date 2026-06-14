@@ -8,6 +8,7 @@ from .rules import (
     NOT_SUITABLE,
     STRONG_ALIGNMENT,
     AnalysisResult,
+    format_signal_age,
 )
 
 
@@ -73,6 +74,7 @@ def _alert_lines(results: list[AnalysisResult], minimum_score: int) -> list[str]
     return [
         f"{_display_symbol(result.symbol)} {result.timeframe_label} {result.direction} "
         f"{result.score_text} {_display_label(result.result_label)}"
+        f"{_event_age_details(result)}"
         for result in sorted(qualified, key=lambda item: (_display_symbol(item.symbol), item.direction != "Long"))
     ]
 
@@ -87,6 +89,17 @@ def _display_label(label: str) -> str:
 
 def _mark(value: bool) -> str:
     return "1" if value else "0"
+
+
+def _event_age_details(result: AnalysisResult) -> str:
+    details: list[str] = []
+    if result.criteria.stoch.valid and result.criteria.stoch.signal_age is not None:
+        details.append(f"Stoch: {format_signal_age(result.criteria.stoch.signal_age)}")
+    if result.criteria.candle.valid and result.criteria.candle.signal_age is not None:
+        details.append(f"Candle: {format_signal_age(result.criteria.candle.signal_age)}")
+    if not details:
+        return ""
+    return " | " + ", ".join(details)
 
 
 def _format_utc_plus_3(value: datetime) -> str:
