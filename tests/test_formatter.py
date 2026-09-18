@@ -9,6 +9,7 @@ from app.rules import (
     LONG,
     NOT_SUITABLE,
     SHORT,
+    STRONG_ALIGNMENT,
     AnalysisResult,
     CriterionResult,
     CriteriaResult,
@@ -83,6 +84,8 @@ def test_summary_removes_usdt_suffix_and_renders_boolean_values_as_1_and_0() -> 
 
 
 def test_not_suitable_and_disclaimer_are_not_printed() -> None:
+    # A score-2 result does not meet minimum_score=4 so no message is produced.
+    # This guarantees NOT_SUITABLE text and DISCLAIMER can never reach Telegram.
     message = format_analysis_message(
         results=[
             _result(
@@ -98,10 +101,7 @@ def test_not_suitable_and_disclaimer_are_not_printed() -> None:
         minimum_score=4,
     )
 
-    assert "ETH  Short 0   0     0    1      1  2/5   -" in message
-    assert NOT_SUITABLE not in message
-    assert DISCLAIMER not in message
-    assert "Alerts:" not in message
+    assert message is None
 
 
 def test_alerts_use_compact_format_and_ok_label() -> None:
@@ -157,3 +157,57 @@ def test_alerts_show_event_signal_ages_without_crowding_summary() -> None:
 
     assert "BTC  Long  1   1     1    1      0  4/5   OK" in message
     assert "BTC 4H Long 4/5 OK | Stoch: 1 candle ago, Candle: latest" in message
+
+
+def test_no_results_returns_none() -> None:
+    result = format_analysis_message(
+        results=[],
+        include_summary=True,
+        include_alerts=True,
+        minimum_score=4,
+    )
+    assert result is None
+
+
+def test_all_below_minimum_score_returns_none() -> None:
+    result = format_analysis_message(
+        results=[
+            _result(
+                "BTC_USDT",
+                LONG,
+                CriteriaResult(False, False, False, False, False),
+                0,
+                NOT_SUITABLE,
+            ),
+            _result(
+                "BTC_USDT",
+                SHORT,
+                CriteriaResult(False, False, False, False, False),
+                0,
+                NOT_SUITABLE,
+            ),
+        ],
+        include_summary=True,
+        include_alerts=True,
+        minimum_score=4,
+    )
+    assert result is None
+
+
+def test_actionable_result_returns_non_none_message() -> None:
+    result = format_analysis_message(
+        results=[
+            _result(
+                "BTC_USDT",
+                LONG,
+                CriteriaResult(True, True, True, True, True),
+                5,
+                STRONG_ALIGNMENT,
+            )
+        ],
+        include_summary=True,
+        include_alerts=True,
+        minimum_score=4,
+    )
+    assert result is not None
+    assert "MEXC TA Summary" in result

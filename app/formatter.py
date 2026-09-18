@@ -25,9 +25,18 @@ def format_analysis_message(
     include_summary: bool,
     include_alerts: bool,
     minimum_score: int,
-) -> str:
+) -> str | None:
+    """Return a formatted Telegram message, or None if there is no actionable signal.
+
+    A result is considered actionable when its score meets *minimum_score*.
+    When no result qualifies, the caller should not send any Telegram message.
+    """
     if not results:
-        return "MEXC TA Summary\nNo results."
+        return None
+
+    actionable = [result for result in results if result.score >= minimum_score]
+    if not actionable:
+        return None
 
     timeframe_label = results[0].timeframe_label
     candle_time = max(result.candle_time_utc for result in results)

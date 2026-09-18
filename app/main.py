@@ -50,12 +50,17 @@ def analyze_timeframe(timeframe: str, config: AppConfig) -> list[AnalysisResult]
             include_alerts=config.enable_alert_messages,
             minimum_score=config.minimum_score,
         )
-        telegram = TelegramClient(
-            bot_token=config.telegram_bot_token,
-            chat_id=config.telegram_chat_id,
-            timeout_seconds=config.request_timeout_seconds,
-        )
-        telegram.send_message(message)
+        if message is None:
+            logger.debug(
+                "No actionable signal for %s — Telegram notification suppressed", timeframe
+            )
+        else:
+            telegram = TelegramClient(
+                bot_token=config.telegram_bot_token,
+                chat_id=config.telegram_chat_id,
+                timeout_seconds=config.request_timeout_seconds,
+            )
+            telegram.send_message(message)
     else:
         logger.warning("No analysis results were produced for %s", timeframe)
 
