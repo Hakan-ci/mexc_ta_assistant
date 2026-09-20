@@ -235,3 +235,46 @@ def test_per_symbol_exception_is_caught_and_other_symbols_continue(
     # ETH_USDT was still analyzed and produced a signal
     assert "ETH_USDT" in processed
     mock_send.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 7. Unified --all execution runs both timeframes with failure isolation
+# ---------------------------------------------------------------------------
+def test_main_all_runs_both_timeframes(tmp_path, monkeypatch) -> None:
+    from app.main import main
+
+    analyzed_tfs: list[str] = []
+
+    def fake_analyze(tf, cfg):
+        analyzed_tfs.append(tf)
+        return []
+
+    monkeypatch.setattr("app.main.analyze_timeframe", fake_analyze)
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig(sqlite_path=tmp_path / "analysis.db"))
+
+    exit_code = main(["--once", "--all"])
+
+    assert exit_code == 0
+    assert set(analyzed_tfs) == {"Hour4", "Day1"}
+
+
+def test_timeframe_failure_isolation_in_main_all(tmp_path, monkeypatch) -> None:
+    from app.main import main
+
+    analyzed_tfs: list[str] = []
+
+    def fake_analyze(tf, cfg):
+        analyzed_tfs.append(tf)
+        if tf == "Hour4":
+            raise RuntimeError("Simulated Hour4 failure")
+        return []
+
+    monkeypatch.setattr("app.main.analyze_timeframe", fake_analyze)
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig(sqlite_path=tmp_path / "analysis.db"))
+
+    exit_code = main(["--once", "--all"])
+
+    # Returns 1 to signal GHA that a failure occurred, but BOTH timeframes were attempted!
+    assert exit_code == 1
+    assert set(analyzed_tfs) == {"Hour4", "Day1"}
+

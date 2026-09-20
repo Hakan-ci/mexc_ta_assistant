@@ -164,9 +164,19 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--once accepts either --timeframe or --all, not both")
 
     if args.all:
+        has_failure = False
         for timeframe in config.timeframes:
-            analyze_timeframe(timeframe, config)
+            try:
+                analyze_timeframe(timeframe, config)
+            except ConfigurationError:
+                raise
+            except Exception:
+                has_failure = True
+                logger.exception("Timeframe analysis failed for %s", timeframe)
+        if has_failure:
+            return 1
         return 0
+
 
     if args.timeframe:
         analyze_timeframe(args.timeframe, config)

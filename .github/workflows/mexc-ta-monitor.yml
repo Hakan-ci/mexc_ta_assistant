@@ -1,8 +1,8 @@
-name: MEXC TA 4H
+name: MEXC TA Monitor
 
 on:
   schedule:
-    # Runs at :07 past 00, 04, 08, 12, 16, 20 UTC (03:07, 07:07, 11:07, 15:07, 19:07, 23:07 Europe/Istanbul, 7 mins after 4H candle close)
+    # Runs at :07 past 00, 04, 08, 12, 16, 20 UTC (03:07, 07:07, 11:07, 15:07, 19:07, 23:07 Europe/Istanbul, 7 mins after 4H boundary)
     - cron: "7 0,4,8,12,16,20 * * *"
   workflow_dispatch:
 
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mexc-ta-4h
+  group: mexc-ta-monitor
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +37,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run 4H analysis
-        run: python -m app.main --once --timeframe Hour4
-
-
+      - name: Run monitoring scan for all timeframes
+        run: python -m app.main --once --all
