@@ -93,11 +93,28 @@ class MexcClient:
         return frame.sort_values("time").reset_index(drop=True)
 
 
-def drop_open_candle(
+def build_candle_id(
+    symbol: str,
+    timeframe: str,
+    candle_time: datetime | str | pd.Timestamp,
+) -> str:
+    """Construct a deterministic, stable identifier for a symbol + timeframe + candle timestamp."""
+    if isinstance(candle_time, (datetime, pd.Timestamp)):
+        if candle_time.tzinfo is None:
+            candle_time = candle_time.replace(tzinfo=timezone.utc)
+        candle_time_str = candle_time.astimezone(timezone.utc).isoformat()
+    else:
+        candle_time_str = str(candle_time)
+    return f"{symbol}:{timeframe}:{candle_time_str}"
+
+
+def get_closed_candles(
     frame: pd.DataFrame,
     timeframe_config: TimeframeConfig,
     now: datetime | None = None,
+    safety_margin_seconds: float = 0.0,
 ) -> pd.DataFrame:
+    """Filter klines dataframe to only include fully closed candles based on exchange timestamps."""
     if frame.empty:
         return frame
 
@@ -107,10 +124,32 @@ def drop_open_candle(
     else:
         now_timestamp = now_timestamp.tz_convert("UTC")
 
-    latest_open = pd.Timestamp(frame.iloc[-1]["time"])
-    latest_close = latest_open + timeframe_config.duration
-    if latest_close > now_timestamp:
-        logger.debug("Dropping currently open candle at %s", latest_open)
-        return frame.iloc[:-1].reset_index(drop=True)
-    return frame.reset_index(drop=True)
+    if safety_margin_seconds > 0:
+        now_timestamp = now_timestamp - pd.Timedelta(seconds=safety_margin_seconds)
+
+    closed_mask = (frame["time"] + timeframe_config.duration) <= now_timestamp
+    closed_frame = frame[closed_mask].reset_index(drop=True)
+    return closed_frame
+
+
+def get_latest_closed_candle(
+    frame: pd.DataFrame,
+    timeframe_config: TimeframeConfig,
+    now: datetime | None = None,
+    safety_margin_seconds: float = 0.0,
+) -> pd.Series | None:
+    """Return the single latest fully closed candle row from klines dataframe, or None if none closed."""
+    closed_frame = get_closed_candles(frame, timeframe_config, now, safety_margin_seconds)
+    if closed_frame.empty:
+        return None
+    return closed_frame.iloc[-1]
+
+
+def drop_open_candle(
+    frame: pd.DataFrame,
+    timeframe_config: TimeframeConfig,
+    now: datetime | None = None,
+) -> pd.DataFrame:
+    """Drop any currently open/forming candle from dataframe."""
+    return get_closed_candles(frame, timeframe_config, now)
 

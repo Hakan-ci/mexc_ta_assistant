@@ -76,7 +76,7 @@ def _make_fake_mexc_client() -> type:
         def fetch_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:
             return pd.DataFrame(
                 {
-                    "time": pd.date_range("2026-01-01", periods=5, freq="4h", tz="UTC"),
+                    "time": pd.date_range(end="2026-09-18 08:00", periods=5, freq="4h", tz="UTC"),
                     "open": [1.0] * 5,
                     "high": [1.1] * 5,
                     "low": [0.9] * 5,

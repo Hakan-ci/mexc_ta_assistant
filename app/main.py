@@ -4,13 +4,15 @@ import argparse
 import logging
 import sys
 
-from .config import AppConfig, load_config
+import os
+from .config import AppConfig, ConfigurationError, load_config
 from .formatter import format_analysis_message
-from .mexc_client import MexcClient
+from .mexc_client import MexcClient, build_candle_id
 from .rules import AnalysisResult, evaluate_symbol_timeframe
 from .scheduler import start_scheduler
 from .storage import AnalysisStorage
 from .telegram_client import TelegramClient
+import pandas as pd
 
 
 logger = logging.getLogger(__name__)
@@ -27,44 +29,110 @@ def analyze_timeframe(timeframe: str, config: AppConfig) -> list[AnalysisResult]
     if timeframe not in config.timeframes:
         raise ValueError(f"Unsupported timeframe: {timeframe}")
 
-    client = MexcClient(config)
-    storage = AnalysisStorage(config.sqlite_path)
-    storage.init_db()
-    results: list[AnalysisResult] = []
+    is_github_actions = (
+        os.getenv("GITHUB_ACTIONS") == "true"
+        or os.getenv("GITHUB_RUN_ID") is not None
+    )
+    if is_github_actions and not config.database_url:
+        raise ConfigurationError(
+            "DATABASE_URL environment variable is required when running under GitHub Actions"
+        )
 
+    logger.info("Starting analysis run for timeframe: %s", timeframe)
+    client = MexcClient(config)
+    storage = AnalysisStorage(config.sqlite_path, database_url=config.database_url)
+    storage.init_db()
+
+    # Step 1: Scan symbols & evaluate signals
     for symbol in config.symbols:
         try:
             frame = client.fetch_klines(symbol, timeframe)
-            symbol_results = evaluate_symbol_timeframe(symbol, timeframe, frame, config)
-            for result in symbol_results:
-                storage.save_result(result)
-            results.extend(symbol_results)
-            logger.info("Analyzed %s %s", symbol, timeframe)
-        except Exception:
-            logger.exception("Failed to analyze %s %s", symbol, timeframe)
+            if frame.empty:
+                logger.warning("No closed candle data available for %s %s", symbol, timeframe)
+                continue
 
-    if results:
+            latest_row = frame.iloc[-1]
+            candle_open_time = pd.Timestamp(latest_row["time"])
+            timeframe_config = config.timeframes[timeframe]
+            candle_close_time = (candle_open_time + timeframe_config.duration).to_pydatetime()
+            candle_id = build_candle_id(symbol, timeframe, candle_close_time)
+
+            status, should_analyze = storage.start_candle_run(symbol, timeframe, candle_close_time)
+
+            if not should_analyze:
+                logger.info(
+                    "Candle %s (%s %s) status is %s; skipping analysis",
+                    candle_id,
+                    symbol,
+                    timeframe,
+                    status,
+                )
+                continue
+
+            try:
+                symbol_results = evaluate_symbol_timeframe(symbol, timeframe, frame, config)
+                actionable_results = [r for r in symbol_results if r.score >= config.minimum_score]
+
+                for result in symbol_results:
+                    storage.save_result(result)
+
+                if actionable_results:
+                    storage.mark_candle_pending_notification(
+                        symbol, timeframe, candle_close_time, signal_count=len(actionable_results)
+                    )
+                    logger.info(
+                        "Candle %s produced %d actionable signal(s); marked PENDING_NOTIFICATION",
+                        candle_id,
+                        len(actionable_results),
+                    )
+                else:
+                    storage.mark_candle_complete_no_signal(symbol, timeframe, candle_close_time)
+                    logger.info("Candle %s produced no actionable signals; marked COMPLETE_NO_SIGNAL", candle_id)
+
+            except Exception as exc:
+                storage.mark_candle_failed(symbol, timeframe, candle_close_time, str(exc))
+                logger.exception("Analysis failed for %s %s", symbol, timeframe)
+
+        except Exception:
+            logger.exception("Failed to fetch/process %s %s", symbol, timeframe)
+
+    # Step 2: Deliver Telegram notifications for any pending candles
+    pending_candle_runs = storage.get_pending_candle_runs(timeframe)
+    if not pending_candle_runs:
+        logger.info("No pending notifications for timeframe %s", timeframe)
+        pending_results = []
+    else:
+        pending_results = storage.get_pending_analysis_results(timeframe)
+
+    if pending_results:
         message = format_analysis_message(
-            results=results,
+            results=pending_results,
             include_summary=config.enable_summary_messages,
             include_alerts=config.enable_alert_messages,
             minimum_score=config.minimum_score,
         )
-        if message is None:
-            logger.debug(
-                "No actionable signal for %s — Telegram notification suppressed", timeframe
-            )
-        else:
+        if message is not None:
             telegram = TelegramClient(
                 bot_token=config.telegram_bot_token,
                 chat_id=config.telegram_chat_id,
                 timeout_seconds=config.request_timeout_seconds,
             )
-            telegram.send_message(message)
-    else:
-        logger.warning("No analysis results were produced for %s", timeframe)
+            success = telegram.send_message(message)
+            if success:
+                for candle_run in pending_candle_runs:
+                    storage.mark_candle_complete_notified(
+                        candle_run["symbol"],
+                        candle_run["timeframe"],
+                        candle_run["candle_close_time"],
+                    )
+                logger.info("Telegram notification sent successfully for %s", timeframe)
+            else:
+                logger.warning(
+                    "Telegram notification delivery failed for %s; state remains PENDING_NOTIFICATION",
+                    timeframe,
+                )
 
-    return results
+    return pending_results
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

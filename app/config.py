@@ -16,6 +16,11 @@ DISCLAIMER = (
 )
 
 
+class ConfigurationError(Exception):
+    """Raised when application configuration is missing or invalid for the execution environment."""
+
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -126,6 +131,7 @@ class AppConfig:
     enable_alert_messages: bool = True
     log_level: str = "INFO"
     sqlite_path: Path = PROJECT_ROOT / "data" / "analysis.db"
+    database_url: str | None = None
 
 
 def load_config() -> AppConfig:
@@ -138,4 +144,6 @@ def load_config() -> AppConfig:
         enable_alert_messages=_env_bool("ENABLE_ALERT_MESSAGES", True),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         sqlite_path=_env_path("SQLITE_PATH", PROJECT_ROOT / "data" / "analysis.db"),
+        database_url=os.getenv("DATABASE_URL"),
     )
+
