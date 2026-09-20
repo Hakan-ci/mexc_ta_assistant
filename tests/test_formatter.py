@@ -43,7 +43,7 @@ def _result(
     )
 
 
-def test_message_uses_compact_header_and_utc_plus_3_close_time() -> None:
+def test_message_uses_signals_header_and_utc_plus_3_close_time() -> None:
     message = format_analysis_message(
         results=[
             _result(
@@ -59,28 +59,54 @@ def test_message_uses_compact_header_and_utc_plus_3_close_time() -> None:
         minimum_score=4,
     )
 
-    assert message.startswith("MEXC TA Summary\nTF: 4H\nClose: 2026-05-30 15:00 UTC+3")
+    assert message is not None
+    assert message.startswith("MEXC TA Signals\nTF: 4H\nClose: 2026-05-30 15:00 UTC+3")
 
 
-def test_summary_removes_usdt_suffix_and_renders_boolean_values_as_1_and_0() -> None:
+def test_only_actionable_signals_are_included() -> None:
     message = format_analysis_message(
         results=[
             _result(
+                "ADA_USDT",
+                LONG,
+                CriteriaResult(False, False, False, True, True),
+                2,
+                NOT_SUITABLE,
+            ),
+            _result(
                 "BTC_USDT",
                 LONG,
-                CriteriaResult(True, True, False, True, False),
+                CriteriaResult(True, True, True, True, False),
                 4,
                 CRITERIA_SATISFIED,
-            )
+            ),
+            _result(
+                "BTC_USDT",
+                SHORT,
+                CriteriaResult(False, False, False, True, False),
+                1,
+                NOT_SUITABLE,
+            ),
+            _result(
+                "XRP_USDT",
+                LONG,
+                CriteriaResult(True, True, True, True, False),
+                4,
+                CRITERIA_SATISFIED,
+            ),
         ],
         include_summary=True,
-        include_alerts=False,
+        include_alerts=True,
         minimum_score=4,
     )
 
-    assert "Coin Dir   RSI Stoch MACD Candle ST Score Result" in message
-    assert "BTC  Long  1   1     0    1      0  4/5   OK" in message
-    assert "BTC_USDT" not in message
+    assert message is not None
+    assert "Signals: 2" in message
+    assert "BTC Long \u2014 4/5" in message
+    assert "XRP Long \u2014 4/5" in message
+    assert "ADA" not in message
+    assert "BTC Short" not in message
+    assert "XRP Short" not in message
 
 
 def test_not_suitable_and_disclaimer_are_not_printed() -> None:
@@ -104,7 +130,7 @@ def test_not_suitable_and_disclaimer_are_not_printed() -> None:
     assert message is None
 
 
-def test_alerts_use_compact_format_and_ok_label() -> None:
+def test_no_duplicate_presentation_or_alerts_section() -> None:
     message = format_analysis_message(
         results=[
             _result(
@@ -127,13 +153,14 @@ def test_alerts_use_compact_format_and_ok_label() -> None:
         minimum_score=4,
     )
 
-    assert "Alerts:\nADA 4H Long 4/5 OK" in message
-    assert "ALERT:" not in message
-    assert "criteria satisfied" not in message
+    assert message is not None
+    assert "ADA Long \u2014 4/5" in message
+    assert "Coin Dir" not in message
+    assert "Alerts:" not in message
     assert "ADA_USDT" not in message
 
 
-def test_alerts_show_event_signal_ages_without_crowding_summary() -> None:
+def test_signal_event_age_details_formatted() -> None:
     message = format_analysis_message(
         results=[
             _result(
@@ -155,8 +182,9 @@ def test_alerts_show_event_signal_ages_without_crowding_summary() -> None:
         minimum_score=4,
     )
 
-    assert "BTC  Long  1   1     1    1      0  4/5   OK" in message
-    assert "BTC 4H Long 4/5 OK | Stoch: 1 candle ago, Candle: latest" in message
+    assert message is not None
+    assert "BTC Long \u2014 4/5" in message
+    assert "Stoch: 1 candle ago | Candle: latest" in message
 
 
 def test_no_results_returns_none() -> None:
@@ -210,4 +238,5 @@ def test_actionable_result_returns_non_none_message() -> None:
         minimum_score=4,
     )
     assert result is not None
-    assert "MEXC TA Summary" in result
+    assert "MEXC TA Signals" in result
+

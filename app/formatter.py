@@ -2,22 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from .rules import (
-    CRITERIA_SATISFIED,
-    CONFLICTING_SIGNAL,
-    NOT_SUITABLE,
-    STRONG_ALIGNMENT,
-    AnalysisResult,
-    format_signal_age,
-)
-
-
-DISPLAY_LABELS = {
-    NOT_SUITABLE: "-",
-    CRITERIA_SATISFIED: "OK",
-    STRONG_ALIGNMENT: "STRONG",
-    CONFLICTING_SIGNAL: "CONFLICT",
-}
+from .rules import AnalysisResult, format_signal_age
 
 
 def format_analysis_message(
@@ -26,10 +11,14 @@ def format_analysis_message(
     include_alerts: bool,
     minimum_score: int,
 ) -> str | None:
-    """Return a formatted Telegram message, or None if there is no actionable signal.
+    """Return a concise Telegram message listing only actionable signals, or None.
 
     A result is considered actionable when its score meets *minimum_score*.
     When no result qualifies, the caller should not send any Telegram message.
+
+    The *include_summary* and *include_alerts* parameters are accepted for
+    backward compatibility but no longer control separate message sections.
+    The output is always a single signal list.
     """
     if not results:
         return None
@@ -40,67 +29,36 @@ def format_analysis_message(
 
     timeframe_label = results[0].timeframe_label
     candle_time = max(result.candle_time_utc for result in results)
+
     lines = [
-        "MEXC TA Summary",
+        "MEXC TA Signals",
         f"TF: {timeframe_label}",
         f"Close: {_format_utc_plus_3(candle_time)}",
         "",
+        f"Signals: {len(actionable)}",
     ]
 
-    if include_summary:
-        lines.extend(_summary_table(results))
-
-    if include_alerts:
-        alert_lines = _alert_lines(results, minimum_score)
-        if alert_lines:
-            if include_summary:
-                lines.append("")
-            lines.append("Alerts:")
-            lines.extend(alert_lines)
-
-    if not include_summary and not include_alerts:
-        lines.append("No enabled message sections for this run.")
+    for result in sorted(
+        actionable,
+        key=lambda item: (_display_symbol(item.symbol), item.direction != "Long"),
+    ):
+        lines.append("")
+        lines.append(
+            f"{_display_symbol(result.symbol)} {result.direction} \u2014 {result.score_text}"
+        )
+        age_line = _event_age_line(result)
+        if age_line:
+            lines.append(age_line)
 
     return "\n".join(lines).rstrip()
-
-
-def _summary_table(results: list[AnalysisResult]) -> list[str]:
-    lines = ["Coin Dir   RSI Stoch MACD Candle ST Score Result"]
-    for result in sorted(results, key=lambda item: (_display_symbol(item.symbol), item.direction != "Long")):
-        criteria = result.criteria.as_dict()
-        lines.append(
-            f"{_display_symbol(result.symbol):<4} {result.direction:<5} "
-            f"{_mark(criteria['RSI']):<3} {_mark(criteria['Stoch']):<5} "
-            f"{_mark(criteria['MACD']):<4} {_mark(criteria['Candle']):<6} "
-            f"{_mark(criteria['ST']):<2} {result.score_text:<5} "
-            f"{_display_label(result.result_label)}"
-        )
-    return lines
-
-
-def _alert_lines(results: list[AnalysisResult], minimum_score: int) -> list[str]:
-    qualified = [result for result in results if result.score >= minimum_score]
-    return [
-        f"{_display_symbol(result.symbol)} {result.timeframe_label} {result.direction} "
-        f"{result.score_text} {_display_label(result.result_label)}"
-        f"{_event_age_details(result)}"
-        for result in sorted(qualified, key=lambda item: (_display_symbol(item.symbol), item.direction != "Long"))
-    ]
 
 
 def _display_symbol(symbol: str) -> str:
     return symbol.removesuffix("_USDT")
 
 
-def _display_label(label: str) -> str:
-    return DISPLAY_LABELS.get(label, label)
-
-
-def _mark(value: bool) -> str:
-    return "1" if value else "0"
-
-
-def _event_age_details(result: AnalysisResult) -> str:
+def _event_age_line(result: AnalysisResult) -> str:
+    """Format a single line of event-age details for an actionable signal."""
     details: list[str] = []
     if result.criteria.stoch.valid and result.criteria.stoch.signal_age is not None:
         details.append(f"Stoch: {format_signal_age(result.criteria.stoch.signal_age)}")
@@ -108,7 +66,7 @@ def _event_age_details(result: AnalysisResult) -> str:
         details.append(f"Candle: {format_signal_age(result.criteria.candle.signal_age)}")
     if not details:
         return ""
-    return " | " + ", ".join(details)
+    return " | ".join(details)
 
 
 def _format_utc_plus_3(value: datetime) -> str:
