@@ -25,18 +25,21 @@ def configure_logging(config: AppConfig) -> None:
     )
 
 
-def analyze_timeframe(timeframe: str, config: AppConfig) -> list[AnalysisResult]:
-    if timeframe not in config.timeframes:
-        raise ValueError(f"Unsupported timeframe: {timeframe}")
-
+def validate_monitor_runtime(config: AppConfig) -> None:
+    """Require persistent database configuration for the GitHub Actions monitor."""
     is_github_actions = (
         os.getenv("GITHUB_ACTIONS") == "true"
         or os.getenv("GITHUB_RUN_ID") is not None
     )
     if is_github_actions and not config.database_url:
         raise ConfigurationError(
-            "DATABASE_URL environment variable is required when running under GitHub Actions"
+            "DATABASE_URL environment variable is required for the GitHub Actions monitor"
         )
+
+
+def analyze_timeframe(timeframe: str, config: AppConfig) -> list[AnalysisResult]:
+    if timeframe not in config.timeframes:
+        raise ValueError(f"Unsupported timeframe: {timeframe}")
 
     logger.info("Starting analysis run for timeframe: %s", timeframe)
     client = MexcClient(config)
@@ -152,6 +155,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     config = load_config()
+    validate_monitor_runtime(config)
     configure_logging(config)
 
     if args.scheduler:

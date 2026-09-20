@@ -15,8 +15,9 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from app.config import AppConfig
-from app.main import analyze_timeframe
+from app.config import AppConfig, ConfigurationError
+from app.main import analyze_timeframe, main
+from app.storage import AnalysisStorage
 from app.rules import (
     LONG,
     NOT_SUITABLE,
@@ -243,6 +244,8 @@ def test_per_symbol_exception_is_caught_and_other_symbols_continue(
 def test_main_all_runs_both_timeframes(tmp_path, monkeypatch) -> None:
     from app.main import main
 
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
     analyzed_tfs: list[str] = []
 
     def fake_analyze(tf, cfg):
@@ -258,9 +261,74 @@ def test_main_all_runs_both_timeframes(tmp_path, monkeypatch) -> None:
     assert set(analyzed_tfs) == {"Hour4", "Day1"}
 
 
+def test_analysis_uses_sqlite_under_github_actions(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    config = AppConfig(
+        symbols=("BTC_USDT",),
+        sqlite_path=tmp_path / "analysis.db",
+        database_url=None,
+    )
+    monkeypatch.setattr("app.main.MexcClient", _make_fake_mexc_client())
+    evaluate = MagicMock(return_value=[_no_signal_result()])
+    monkeypatch.setattr("app.main.evaluate_symbol_timeframe", evaluate)
+
+    with patch("app.main.TelegramClient") as telegram:
+        assert analyze_timeframe("Hour4", config) == []
+        telegram.assert_not_called()
+
+    evaluate.assert_called_once()
+    assert config.sqlite_path.is_file()
+    storage = AnalysisStorage(config.sqlite_path)
+    with storage.backend._connect() as conn:
+        row = conn.execute(
+            "SELECT status FROM candle_runs WHERE symbol = ? AND timeframe = ?",
+            ("BTC_USDT", "Hour4"),
+        ).fetchone()
+    assert row == ("COMPLETE_NO_SIGNAL",)
+
+
+@pytest.mark.parametrize("marker", ["GITHUB_ACTIONS", "GITHUB_RUN_ID"])
+@pytest.mark.parametrize("database_url", [None, ""])
+@pytest.mark.parametrize("argv", [["--once", "--all"], ["--once", "--timeframe", "Hour4"], ["--scheduler"]])
+def test_main_rejects_missing_database_before_startup(
+    tmp_path, monkeypatch, marker, database_url, argv
+) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.setenv(marker, "true" if marker == "GITHUB_ACTIONS" else "123")
+    config = AppConfig(sqlite_path=tmp_path / "analysis.db", database_url=database_url)
+    monkeypatch.setattr("app.main.load_config", lambda: config)
+
+    with patch("app.main.analyze_timeframe") as analyze, patch("app.main.start_scheduler") as scheduler:
+        with pytest.raises(ConfigurationError, match="required for the GitHub Actions monitor"):
+            main(argv)
+        analyze.assert_not_called()
+        scheduler.assert_not_called()
+    assert not config.sqlite_path.exists()
+
+
+@pytest.mark.parametrize("marker", ["GITHUB_ACTIONS", "GITHUB_RUN_ID"])
+def test_main_with_database_url_runs_both_timeframes(tmp_path, monkeypatch, marker) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.setenv(marker, "true" if marker == "GITHUB_ACTIONS" else "123")
+    config = AppConfig(
+        sqlite_path=tmp_path / "analysis.db",
+        database_url="postgresql://test:test@localhost/test",
+    )
+    monkeypatch.setattr("app.main.load_config", lambda: config)
+    with patch("app.main.analyze_timeframe", return_value=[]) as analyze:
+        assert main(["--once", "--all"]) == 0
+    assert [call.args for call in analyze.call_args_list] == [
+        ("Hour4", config), ("Day1", config)
+    ]
+
+
 def test_timeframe_failure_isolation_in_main_all(tmp_path, monkeypatch) -> None:
     from app.main import main
 
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
     analyzed_tfs: list[str] = []
 
     def fake_analyze(tf, cfg):
@@ -277,4 +345,3 @@ def test_timeframe_failure_isolation_in_main_all(tmp_path, monkeypatch) -> None:
     # Returns 1 to signal GHA that a failure occurred, but BOTH timeframes were attempted!
     assert exit_code == 1
     assert set(analyzed_tfs) == {"Hour4", "Day1"}
-

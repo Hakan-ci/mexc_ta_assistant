@@ -422,6 +422,7 @@ def test_fresh_vs_stale_processing_lock_reclaim(tmp_path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 def test_missing_database_url_in_github_actions_fails_fast(tmp_path, monkeypatch) -> None:
     from app.config import ConfigurationError
+    from app.main import validate_monitor_runtime
 
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     config = AppConfig(
@@ -431,7 +432,7 @@ def test_missing_database_url_in_github_actions_fails_fast(tmp_path, monkeypatch
     )
 
     with pytest.raises(ConfigurationError, match="DATABASE_URL environment variable is required"):
-        analyze_timeframe("Hour4", config)
+        validate_monitor_runtime(config)
 
 
 # ---------------------------------------------------------------------------
@@ -446,5 +447,4 @@ def test_mask_database_url() -> None:
     assert "secret123" not in masked
     assert "****" in masked
     assert "postgres.example.com" in masked
-
 
