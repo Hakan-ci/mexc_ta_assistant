@@ -1,6 +1,6 @@
 # MEXC Futures Technical Analysis Assistant
 
-Python-based technical analysis assistant for selected MEXC Futures symbols. It only reads public MEXC Futures market data, evaluates predefined technical criteria, stores the results in SQLite, and can notify a Telegram chat.
+Python-based technical analysis assistant for selected MEXC Futures symbols. It only reads public MEXC Futures market data, evaluates predefined technical criteria, stores results in PostgreSQL (production) or SQLite (local development), and can notify a Telegram chat.
 
 This project is not a trading bot. It does not use private MEXC endpoints, account data, API keys, leverage controls, position controls, or order endpoints.
 
@@ -54,7 +54,7 @@ Run all configured timeframes:
 python -m app.main --once --all
 ```
 
-If Telegram is not configured, the analysis still runs and stores SQLite rows, but messages are not sent.
+If Telegram is not configured, analysis still runs and stores results. Actionable notifications remain pending and blocked; the command exits nonzero. The scheduler requires Telegram credentials at startup.
 
 ## Scheduler Execution
 
@@ -62,47 +62,53 @@ If Telegram is not configured, the analysis still runs and stores SQLite rows, b
 python -m app.main --scheduler
 ```
 
-The scheduler runs in UTC:
+The scheduler reconciles each timeframe independently at seconds `00` and `30`, and immediately at startup. Candles become eligible two minutes after their UTC close. Completed candles are checked in the database before fetching MEXC data. If MEXC has not published the expected candle, the next tick retries it; older data is never silently substituted.
 
-- 4H analysis: 2 minutes after every 4-hour candle close.
-- Daily analysis: 3 minutes after the daily candle close.
+After downtime, only the latest eligible candle is analyzed. Skipped intervals are recorded in `recovery_gaps` and logged. Previously pending notifications are retained and sent with their original candle timestamps. Indicators and scoring are unchanged.
 
-## Docker Usage
+Delivery runs independently, wakes immediately after analysis, and checks retries every 30 seconds. Transient failures back off by 30, 60, 120, then 300 seconds, honoring longer Telegram `retry_after` limits across both timeframes. Permanent failures remain blocked and unhealthy until explicitly reset. Retries are durable across restarts. Telegram delivery is at-least-once: a lost acknowledgement can cause a duplicate.
+
+## Production Docker deployment
+
+Use one Linux VPS with Docker and the Compose plugin, accurate system time, and outbound connectivity to MEXC, Telegram, and your PostgreSQL/Supabase endpoint. No inbound application port is needed. Run exactly one service replica.
 
 ```bash
-cd mexc_ta_assistant
 cp .env.example .env
-docker compose up --build
+chmod 600 .env
+# Edit .env with DATABASE_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+docker compose build
 ```
 
-SQLite data is stored under `./data` through the compose volume.
+Use your existing production database so candle IDs and notification state survive cutover. Compose requires a PostgreSQL `DATABASE_URL`; SQLite remains available for local runs outside production Compose. Runtime schema additions are applied automatically and preserve existing tables and rows. Back up the database before cutover. Keep credentials out of version control; `.dockerignore` excludes environment files, databases, and local data from the image.
 
-## GitHub Actions
+Cutover sequence:
 
-This project includes a single scheduled GitHub Actions workflow for hosted monitoring:
+1. Validate the image against an isolated test database and test Telegram chat. Confirm public MEXC data is reachable from the VPS and that both timeframes complete correctly.
+2. Disable the existing GitHub scheduled monitor and wait for any active run to finish. Deploy this revision, which retains only manual dispatch for monitoring.
+3. Start the service with `docker compose up -d --build`.
+4. Check `docker compose ps` and `docker compose logs --tail=100 mexc-ta-assistant`. Confirm both startup scans and the delivery job are running.
+5. Run `docker compose exec mexc-ta-assistant python -m app.health` and investigate any unresolved candles or blocked delivery.
 
-- `MEXC TA Monitor`: runs at `00:07`, `04:07`, `08:07`, `12:07`, `16:07`, and `20:07` UTC (03:07 Europe/Istanbul).
-- Every run checks both `Hour4` and `Day1` timeframes.
-- Durable candle IDs and database state (via PostgreSQL/Supabase `DATABASE_URL`) skip already-processed candles (so `Day1` is processed once per day while `Hour4` runs every 4 hours).
-- `Tests`: runs on `push`, `pull_request`, and manual dispatch.
+The container restarts after process failure or host reboot. Logs rotate at 10 MB with three files. Docker health checks detect missing scheduler ticks after 90 seconds, scan errors, permanently blocked delivery, and candles/notifications unresolved beyond five minutes. A Docker `unhealthy` status alone does **not** restart the container: connect your VPS monitoring to the container health status, and use the health command to investigate.
 
-Add the required repository secrets:
+If Telegram credentials or chat permissions were wrong, correct `.env`, recreate the container, then explicitly re-enable the blocked notifications:
 
-1. Open the GitHub repository.
-2. Go to `Settings` -> `Secrets and variables` -> `Actions`.
-3. Select `New repository secret`.
-4. Add `TELEGRAM_BOT_TOKEN`.
-5. Add `TELEGRAM_CHAT_ID`.
-6. Add `DATABASE_URL` (PostgreSQL/Supabase connection string for production state storage).
+```bash
+docker compose up -d --force-recreate
+docker compose exec mexc-ta-assistant python -m app.health --reset-blocked
+```
 
-To run a workflow manually:
+Healthy scans record `scan_start` and `scan_end`; notifications record candle close, acknowledgement time, attempt count, and end-to-end latency. `runtime_health` retains the last tick, last successful tick, and current error for each job. `candle_runs` retains retry deadlines, errors, and `notified_at`. A lack of trading signals is normal and does not make a completed scan unhealthy.
 
-1. Open the repository `Actions` tab.
-2. Select `MEXC TA Monitor` or `Tests`.
-3. Select `Run workflow`.
-4. Choose the branch and confirm `Run workflow`.
+Observe at least seven days, including daily boundaries. Target: at least 95% of actionable candle notifications acknowledged within 180 seconds of close while external services are healthy. Use `notified_at - candle_close_time` (timestamps are stored as UTC ISO strings) to calculate latency; count unresolved actionable candles as misses and report outages separately. This is an operational target, not a guaranteed platform SLA.
 
-Production workflow runs under GitHub Actions require `DATABASE_URL` to be configured as a repository secret. Local development and unit tests continue to use local SQLite storage (`data/analysis.db`).
+## GitHub Actions and manual recovery
+
+- `Tests` runs on push, pull request, and manual dispatch, including an isolated PostgreSQL service for integration tests.
+- `MEXC TA Monitor` is manual-only. It requires `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` repository secrets.
+- **Stop the VPS service before dispatching manual recovery:** `docker compose stop mexc-ta-assistant`. Wait for the workflow to finish, then restart with `docker compose up -d`. Do not run both schedulers against the production database.
+- Manual scans keep `--once --all` and `--once --timeframe Hour4|Day1`. They return nonzero on scan failure or undelivered notifications. A manual pass delivers one due candle-close batch per timeframe; the continuous service drains additional pending batches.
+- For rollback, stop the new service before starting an older monitor. The schema migration is additive; do not delete candle or notification state. Older versions do not honor the new delivery retry metadata, so use rollback only as a controlled recovery action.
 
 ## Scoring System
 
@@ -140,4 +146,10 @@ cd mexc_ta_assistant
 pytest
 ```
 
-The tests cover indicator calculations, crossover and fading logic, Supertrend direction, rule labels, candlestick patterns, and SQLite duplicate prevention.
+Tests cover indicators, formatting, UTC boundaries, candle availability, transactional completion, competing claims, lease recovery, durable retries, Telegram error handling, and scheduler health. SQLite tests run by default. To also run PostgreSQL tests against a disposable database:
+
+```bash
+TEST_DATABASE_URL=postgresql://test:test@localhost:5432/test pytest
+```
+
+Each PostgreSQL test creates and removes its own schema. The test user needs schema creation permission; use an isolated test database, never production. CI runs both backends.

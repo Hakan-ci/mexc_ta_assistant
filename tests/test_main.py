@@ -9,14 +9,15 @@ Verifies that:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
 
+from app.telegram_client import DeliveryResult
 from app.config import AppConfig, ConfigurationError
-from app.main import analyze_timeframe, main
+from app.main import analyze_timeframe, main, AnalysisRunError
 from app.storage import AnalysisStorage
 from app.rules import (
     LONG,
@@ -112,7 +113,7 @@ def test_buy_signal_sends_telegram(_base_config, monkeypatch) -> None:
     )
     monkeypatch.setattr("app.main.MexcClient", _make_fake_mexc_client())
 
-    mock_send = MagicMock(return_value=True)
+    mock_send = MagicMock(return_value=DeliveryResult(True))
     with patch("app.main.TelegramClient") as MockTelegram:
         MockTelegram.return_value.send_message = mock_send
         analyze_timeframe("Hour4", _base_config)
@@ -132,7 +133,7 @@ def test_sell_signal_sends_telegram(_base_config, monkeypatch) -> None:
     )
     monkeypatch.setattr("app.main.MexcClient", _make_fake_mexc_client())
 
-    mock_send = MagicMock(return_value=True)
+    mock_send = MagicMock(return_value=DeliveryResult(True))
     with patch("app.main.TelegramClient") as MockTelegram:
         MockTelegram.return_value.send_message = mock_send
         analyze_timeframe("Hour4", _base_config)
@@ -181,7 +182,8 @@ def test_no_signal_on_one_symbol_does_not_stop_others(tmp_path, monkeypatch) -> 
     monkeypatch.setattr("app.main.evaluate_symbol_timeframe", fake_evaluate)
     monkeypatch.setattr("app.main.MexcClient", _make_fake_mexc_client())
 
-    with patch("app.main.TelegramClient"):
+    with patch("app.main.TelegramClient") as telegram:
+        telegram.return_value.send_message.return_value = DeliveryResult(True)
         analyze_timeframe("Hour4", config)
 
     assert set(processed) == {"BTC_USDT", "ETH_USDT", "SOL_USDT"}
@@ -227,11 +229,12 @@ def test_per_symbol_exception_is_caught_and_other_symbols_continue(
     monkeypatch.setattr("app.main.evaluate_symbol_timeframe", fake_evaluate)
     monkeypatch.setattr("app.main.MexcClient", _make_fake_mexc_client())
 
-    mock_send = MagicMock(return_value=True)
+    mock_send = MagicMock(return_value=DeliveryResult(True))
     with patch("app.main.TelegramClient") as MockTelegram:
         MockTelegram.return_value.send_message = mock_send
-        # Must not propagate the RuntimeError
-        analyze_timeframe("Hour4", config)
+        # Other symbols complete, but the caller now receives a failure status.
+        with pytest.raises(AnalysisRunError):
+            analyze_timeframe("Hour4", config)
 
     # ETH_USDT was still analyzed and produced a signal
     assert "ETH_USDT" in processed
@@ -345,3 +348,8 @@ def test_timeframe_failure_isolation_in_main_all(tmp_path, monkeypatch) -> None:
     # Returns 1 to signal GHA that a failure occurred, but BOTH timeframes were attempted!
     assert exit_code == 1
     assert set(analyzed_tfs) == {"Hour4", "Day1"}
+
+
+@pytest.fixture(autouse=True)
+def fixed_scan_clock(monkeypatch):
+    monkeypatch.setattr("app.main.utc_now", lambda: _NOW + timedelta(minutes=2))

@@ -7,5 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["python", "-m", "app.main", "--scheduler"]
+EXPOSE 8000
 
+# Default: run the FastAPI webhook server.
+# Override with ["python", "-m", "app.main", "--scheduler"] for the legacy mode.
+CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]

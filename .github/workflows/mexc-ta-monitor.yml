@@ -1,9 +1,7 @@
 name: MEXC TA Monitor
 
 on:
-  schedule:
-    # Runs at :07 past 00, 04, 08, 12, 16, 20 UTC (03:07, 07:07, 11:07, 15:07, 19:07, 23:07 Europe/Istanbul, 7 mins after 4H boundary)
-    - cron: "7 0,4,8,12,16,20 * * *"
+  # Manual recovery only. Stop the VPS service before dispatching.
   workflow_dispatch:
 
 permissions:

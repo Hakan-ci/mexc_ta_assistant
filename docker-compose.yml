@@ -1,9 +1,56 @@
 services:
-  mexc-ta-assistant:
+  # ── Webhook API server (default) ──────────────────────────────────────
+  mexc-ta-api:
     build: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    ports:
+      - "8000:8000"
     env_file:
       - .env
+    environment:
+      REQUIRE_DATABASE_URL: "true"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./data:/app/data
+    # Uses the Dockerfile CMD (uvicorn) by default.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Legacy scheduler (opt-in) ─────────────────────────────────────────
+  mexc-ta-scheduler:
+    build: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 120s
+    env_file:
+      - .env
+    environment:
+      REQUIRE_DATABASE_URL: "true"
+      PYTHONUNBUFFERED: "1"
     volumes:
       - ./data:/app/data
     command: python -m app.main --scheduler
-
+    profiles:
+      - scheduler
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.health"]
+      interval: 30s
+      timeout: 60s
+      retries: 2
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import logging
 import sqlite3
 from abc import ABC, abstractmethod
@@ -166,7 +167,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
 
     def init_db(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.executescript(SQLITE_SCHEMA_V1)
             self._migrate_columns(connection)
             now_str = datetime.now(timezone.utc).isoformat()
@@ -198,7 +199,8 @@ class SQLiteStorageBackend(BaseStorageBackend):
         now_dt = datetime.now(timezone.utc)
         now_str = now_dt.isoformat()
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
                 SELECT status, updated_at FROM candle_runs
@@ -291,7 +293,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
     ) -> None:
         candle_close_str = _to_iso(candle_close_time)
         now_str = datetime.now(timezone.utc).isoformat()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 UPDATE candle_runs
@@ -312,7 +314,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
     ) -> None:
         candle_close_str = _to_iso(candle_close_time)
         now_str = datetime.now(timezone.utc).isoformat()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 UPDATE candle_runs
@@ -334,7 +336,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
     ) -> None:
         candle_close_str = _to_iso(candle_close_time)
         now_str = datetime.now(timezone.utc).isoformat()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 UPDATE candle_runs
@@ -355,7 +357,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
     ) -> None:
         candle_close_str = _to_iso(candle_close_time)
         now_str = datetime.now(timezone.utc).isoformat()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 UPDATE candle_runs
@@ -373,7 +375,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
             )
 
     def get_pending_candle_runs(self, timeframe: str) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             cursor = connection.execute(
                 """
                 SELECT symbol, timeframe, candle_close_time, candle_id, signal_count
@@ -394,7 +396,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
             ]
 
     def get_pending_analysis_results(self, timeframe: str) -> list[AnalysisResult]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             cursor = connection.execute(
                 """
                 SELECT r.candle_time_utc, r.created_at_utc, r.symbol, r.timeframe,
@@ -413,7 +415,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
     def save_result(self, result: AnalysisResult) -> None:
         signal_ages = result.criteria.signal_ages()
         criteria_details = result.criteria.details_dict()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO analysis_results (
@@ -452,7 +454,7 @@ class SQLiteStorageBackend(BaseStorageBackend):
         self, symbol: str, timeframe: str, candle_time_utc: Any
     ) -> bool:
         candle_time_str = _to_iso(candle_time_utc)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute(
                 """
                 SELECT status FROM candle_runs
@@ -535,15 +537,23 @@ class PostgresStorageBackend(BaseStorageBackend):
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
 
+        connection = None
         try:
-            return psycopg2.connect(url)
-        except Exception as exc:
-            masked = mask_database_url(url)
-            logger.error("Failed to connect to PostgreSQL at %s", masked)
-            raise RuntimeError(f"PostgreSQL connection failed: {masked}") from exc
+            connection = psycopg2.connect(url, connect_timeout=10)
+            # Transaction-local settings also work through PostgreSQL transaction poolers.
+            # Avoid startup `options`, which some managed poolers reject.
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '15s'")
+                cursor.execute("SET LOCAL lock_timeout = '10s'")
+            return connection
+        except Exception:
+            if connection is not None:
+                connection.close()
+            logger.error("Failed to connect to PostgreSQL")
+            raise RuntimeError("PostgreSQL connection failed") from None
 
     def init_db(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(POSTGRES_SCHEMA_V1)
                 now_str = datetime.now(timezone.utc).isoformat()
@@ -565,7 +575,7 @@ class PostgresStorageBackend(BaseStorageBackend):
         now_dt = datetime.now(timezone.utc)
         now_str = now_dt.isoformat()
 
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 # Atomic INSERT ON CONFLICT DO NOTHING
                 cur.execute(
@@ -595,7 +605,7 @@ class PostgresStorageBackend(BaseStorageBackend):
                 cur.execute(
                     """
                     SELECT status, updated_at FROM candle_runs
-                    WHERE symbol = %s AND timeframe = %s AND candle_close_time = %s;
+                    WHERE symbol = %s AND timeframe = %s AND candle_close_time = %s FOR UPDATE;
                     """,
                     (symbol, timeframe, candle_close_str),
                 )
@@ -649,7 +659,7 @@ class PostgresStorageBackend(BaseStorageBackend):
     ) -> None:
         candle_close_str = _to_iso(candle_close_time)
         now_str = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -672,7 +682,7 @@ class PostgresStorageBackend(BaseStorageBackend):
     ) -> None:
         candle_close_str = _to_iso(candle_close_time)
         now_str = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -696,7 +706,7 @@ class PostgresStorageBackend(BaseStorageBackend):
     ) -> None:
         candle_close_str = _to_iso(candle_close_time)
         now_str = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -719,7 +729,7 @@ class PostgresStorageBackend(BaseStorageBackend):
     ) -> None:
         candle_close_str = _to_iso(candle_close_time)
         now_str = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -739,7 +749,7 @@ class PostgresStorageBackend(BaseStorageBackend):
             conn.commit()
 
     def get_pending_candle_runs(self, timeframe: str) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -763,7 +773,7 @@ class PostgresStorageBackend(BaseStorageBackend):
                 ]
 
     def get_pending_analysis_results(self, timeframe: str) -> list[AnalysisResult]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -785,7 +795,7 @@ class PostgresStorageBackend(BaseStorageBackend):
     def save_result(self, result: AnalysisResult) -> None:
         signal_ages = result.criteria.signal_ages()
         criteria_details = result.criteria.details_dict()
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -827,7 +837,7 @@ class PostgresStorageBackend(BaseStorageBackend):
         self, symbol: str, timeframe: str, candle_time_utc: Any
     ) -> bool:
         candle_time_str = _to_iso(candle_time_utc)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -943,7 +953,7 @@ def _parse_analysis_result_rows(rows: list[tuple[Any, ...]]) -> list[AnalysisRes
                 created_at_utc=created_at,
                 symbol=row[2],
                 timeframe=row[3],
-                timeframe_label=row[3],
+                timeframe_label={"Hour4": "4H", "Day1": "1D"}.get(row[3], row[3]),
                 direction=row[4],
                 rsi_value=row[5],
                 stoch_k=row[6],

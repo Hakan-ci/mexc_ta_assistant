@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from app.telegram_client import DeliveryResult
 from app.config import AppConfig, TimeframeConfig
 from app.main import analyze_timeframe
 from app.mexc_client import (
@@ -49,7 +50,7 @@ def _make_result(
     candle_time: datetime | None = None,
     score: int = 5,
 ) -> AnalysisResult:
-    c_time = candle_time or datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    c_time = candle_time or datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
     all_valid = score >= 4
     return AnalysisResult(
         candle_time_utc=c_time,
@@ -129,11 +130,11 @@ def test_no_closed_candle_returns_none() -> None:
 # D. Delayed GitHub execution: candle closes at 03:00, job runs at 03:12
 # ---------------------------------------------------------------------------
 def test_delayed_execution_selects_correct_completed_candle() -> None:
-    # 4H candle closes at 03:00 UTC (open 2026-09-19 23:00)
-    # Execution occurs at 03:12 UTC
-    now_delayed = datetime(2026, 9, 20, 3, 12, tzinfo=timezone.utc)
-    t_open = datetime(2026, 9, 19, 23, 0, tzinfo=timezone.utc) # closes 03:00 <= 03:12
-    t_open_next = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc) # closes 07:00 > 03:12
+    # 4H candle closes at 04:00 UTC (open 2026-09-20 00:00)
+    # Execution occurs at 04:12 UTC
+    now_delayed = datetime(2026, 9, 20, 4, 12, tzinfo=timezone.utc)
+    t_open = datetime(2026, 9, 20, 0, 0, tzinfo=timezone.utc) # closes 04:00 <= 04:12
+    t_open_next = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc) # closes 08:00 > 04:12
     frame = _make_sample_frame([t_open, t_open_next])
 
     latest_closed = get_latest_closed_candle(frame, _TF_4H, now=now_delayed)
@@ -150,7 +151,7 @@ def test_duplicate_processing_skipped(tmp_path) -> None:
     storage = AnalysisStorage(db_path)
     storage.init_db()
 
-    candle_close = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    candle_close = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
     result = _make_result("BTC_USDT", "Day1", candle_close)
 
     assert not storage.is_candle_processed("BTC_USDT", "Day1", candle_close)
@@ -166,7 +167,7 @@ def test_duplicate_processing_skipped(tmp_path) -> None:
 # F. Different symbols have separate candle IDs
 # ---------------------------------------------------------------------------
 def test_different_symbols_have_separate_candle_ids() -> None:
-    c_time = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    c_time = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
     id_btc = build_candle_id("BTC_USDT", "Day1", c_time)
     id_xrp = build_candle_id("XRP_USDT", "Day1", c_time)
 
@@ -179,7 +180,7 @@ def test_different_symbols_have_separate_candle_ids() -> None:
 # G. Different timeframes have separate candle IDs
 # ---------------------------------------------------------------------------
 def test_different_timeframes_have_separate_candle_ids() -> None:
-    c_time = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    c_time = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
     id_1d = build_candle_id("BTC_USDT", "Day1", c_time)
     id_4h = build_candle_id("BTC_USDT", "Hour4", c_time)
 
@@ -200,7 +201,7 @@ def test_repeated_workflow_execution_skips_resending(tmp_path, monkeypatch) -> N
         telegram_chat_id="fake-chat",
     )
 
-    candle_time = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    candle_time = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
     res = _make_result("BTC_USDT", "Hour4", candle_time, score=5)
 
     class FakeMexcClient:
@@ -208,12 +209,12 @@ def test_repeated_workflow_execution_skips_resending(tmp_path, monkeypatch) -> N
             pass
 
         def fetch_klines(self, symbol, tf):
-            return _make_sample_frame([datetime(2026, 9, 19, 23, 0, tzinfo=timezone.utc)])
+            return _make_sample_frame([datetime(2026, 9, 20, 0, 0, tzinfo=timezone.utc)])
 
     monkeypatch.setattr("app.main.MexcClient", FakeMexcClient)
     monkeypatch.setattr("app.main.evaluate_symbol_timeframe", lambda sym, tf, fr, cfg: [res])
 
-    mock_send = MagicMock(return_value=True)
+    mock_send = MagicMock(return_value=DeliveryResult(True))
 
     with patch("app.main.TelegramClient") as MockTelegram:
         MockTelegram.return_value.send_message = mock_send
@@ -247,7 +248,7 @@ def test_one_processed_symbol_does_not_stop_remaining_symbols(tmp_path, monkeypa
     storage = AnalysisStorage(config.sqlite_path)
     storage.init_db()
 
-    c_close = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    c_close = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
     storage.start_candle_run("BTC_USDT", "Hour4", c_close)
     storage.mark_candle_complete_no_signal("BTC_USDT", "Hour4", c_close)
 
@@ -256,7 +257,7 @@ def test_one_processed_symbol_does_not_stop_remaining_symbols(tmp_path, monkeypa
             pass
 
         def fetch_klines(self, symbol, tf):
-            return _make_sample_frame([datetime(2026, 9, 19, 23, 0, tzinfo=timezone.utc)])
+            return _make_sample_frame([datetime(2026, 9, 20, 0, 0, tzinfo=timezone.utc)])
 
     evaluated_symbols: list[str] = []
 
@@ -267,7 +268,8 @@ def test_one_processed_symbol_does_not_stop_remaining_symbols(tmp_path, monkeypa
     monkeypatch.setattr("app.main.MexcClient", FakeMexcClient)
     monkeypatch.setattr("app.main.evaluate_symbol_timeframe", fake_evaluate)
 
-    with patch("app.main.TelegramClient"):
+    with patch("app.main.TelegramClient") as telegram:
+        telegram.return_value.send_message.return_value = DeliveryResult(True)
         results = analyze_timeframe("Hour4", config)
 
     # BTC_USDT was skipped because it was already processed; ETH_USDT was evaluated
@@ -288,7 +290,7 @@ def test_zero_signal_candle_lifecycle(tmp_path, monkeypatch) -> None:
         telegram_chat_id="fake-chat",
     )
 
-    c_close = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    c_close = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
     no_sig = _make_result("BTC_USDT", "Hour4", c_close, score=1)
 
     class FakeMexcClient:
@@ -296,7 +298,7 @@ def test_zero_signal_candle_lifecycle(tmp_path, monkeypatch) -> None:
             pass
 
         def fetch_klines(self, symbol, tf):
-            return _make_sample_frame([datetime(2026, 9, 19, 23, 0, tzinfo=timezone.utc)])
+            return _make_sample_frame([datetime(2026, 9, 20, 0, 0, tzinfo=timezone.utc)])
 
     monkeypatch.setattr("app.main.MexcClient", FakeMexcClient)
     monkeypatch.setattr("app.main.evaluate_symbol_timeframe", lambda sym, tf, fr, cfg: [no_sig])
@@ -321,7 +323,7 @@ def test_telegram_failure_keeps_pending_and_retries(tmp_path, monkeypatch) -> No
         telegram_chat_id="fake-chat",
     )
 
-    c_close = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    c_close = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
     sig_result = _make_result("BTC_USDT", "Hour4", c_close, score=5)
 
     class FakeMexcClient:
@@ -329,7 +331,7 @@ def test_telegram_failure_keeps_pending_and_retries(tmp_path, monkeypatch) -> No
             pass
 
         def fetch_klines(self, symbol, tf):
-            return _make_sample_frame([datetime(2026, 9, 19, 23, 0, tzinfo=timezone.utc)])
+            return _make_sample_frame([datetime(2026, 9, 20, 0, 0, tzinfo=timezone.utc)])
 
     eval_count = 0
 
@@ -343,10 +345,10 @@ def test_telegram_failure_keeps_pending_and_retries(tmp_path, monkeypatch) -> No
 
     # First run: Telegram fails
     mock_telegram_fail = MagicMock()
-    mock_telegram_fail.send_message.return_value = False
+    mock_telegram_fail.send_message.return_value = DeliveryResult(False, retryable=True)
 
     with patch("app.main.TelegramClient", return_value=mock_telegram_fail):
-        results_run1 = analyze_timeframe("Hour4", config)
+        results_run1 = analyze_timeframe("Hour4", config, strict=False)
 
     assert eval_count == 1
     storage = AnalysisStorage(config.sqlite_path)
@@ -354,9 +356,10 @@ def test_telegram_failure_keeps_pending_and_retries(tmp_path, monkeypatch) -> No
     assert len(pending_runs) == 1
     assert pending_runs[0]["symbol"] == "BTC_USDT"
 
-    # Second run: Telegram succeeds. Indicators must NOT be re-evaluated!
+    # Second run after the durable retry deadline. Indicators are not re-evaluated.
+    monkeypatch.setattr("app.main.utc_now", lambda: datetime(2026, 9, 20, 4, 2, 30, tzinfo=timezone.utc))
     mock_telegram_ok = MagicMock()
-    mock_telegram_ok.send_message.return_value = True
+    mock_telegram_ok.send_message.return_value = DeliveryResult(True)
 
     with patch("app.main.TelegramClient", return_value=mock_telegram_ok):
         results_run2 = analyze_timeframe("Hour4", config)
@@ -375,7 +378,7 @@ def test_atomic_concurrency_prevents_duplicate_ownership(tmp_path) -> None:
     storage2 = AnalysisStorage(db_path)
     storage1.init_db()
 
-    c_close = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    c_close = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
 
     status1, analyze1 = storage1.start_candle_run("BTC_USDT", "Hour4", c_close)
     status2, analyze2 = storage2.start_candle_run("BTC_USDT", "Hour4", c_close)
@@ -393,7 +396,7 @@ def test_fresh_vs_stale_processing_lock_reclaim(tmp_path, monkeypatch) -> None:
     storage = AnalysisStorage(db_path)
     storage.init_db()
 
-    c_close = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    c_close = datetime(2026, 9, 20, 4, 0, tzinfo=timezone.utc)
 
     # 1. Fresh claim
     status, analyze = storage.start_candle_run("BTC_USDT", "Hour4", c_close)
@@ -448,3 +451,8 @@ def test_mask_database_url() -> None:
     assert "****" in masked
     assert "postgres.example.com" in masked
 
+
+
+@pytest.fixture(autouse=True)
+def fixed_scan_clock(monkeypatch):
+    monkeypatch.setattr("app.main.utc_now", lambda: datetime(2026, 9, 20, 4, 2, tzinfo=timezone.utc))

@@ -132,6 +132,7 @@ class AppConfig:
     log_level: str = "INFO"
     sqlite_path: Path = PROJECT_ROOT / "data" / "analysis.db"
     database_url: str | None = None
+    webhook_api_key: str | None = None
 
 
 def load_config() -> AppConfig:
@@ -145,5 +146,6 @@ def load_config() -> AppConfig:
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         sqlite_path=_env_path("SQLITE_PATH", PROJECT_ROOT / "data" / "analysis.db"),
         database_url=os.getenv("DATABASE_URL"),
+        webhook_api_key=os.getenv("WEBHOOK_API_KEY"),
     )
 
